@@ -6,6 +6,7 @@ __pycache__/
 .venv-*/
 .cache/
 outputs/
+configs/model_benchmark.local.yaml
 
 .env
 *.env

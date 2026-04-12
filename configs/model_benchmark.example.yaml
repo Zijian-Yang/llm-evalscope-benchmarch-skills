@@ -49,6 +49,7 @@ scenarios:
   gradient:
     enabled: true
     parallels: [1, 2, 5, 8, 10, 15, 20]
+    numbers: null
     number_multiplier: 10
     min_number: 50
     max_tokens: 128

@@ -58,9 +58,9 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
 - `environment`: venv 路径、env 文件路径、安装源、pip 镜像、ModelScope/HF 镜像设置。国内网络默认使用清华 PyPI 镜像和 `https://hf-mirror.com`。
 - `model`: `api`、`name`、`api_url`、`api_key_env`、`tokenizer_path`。默认端点是阿里云 DashScope OpenAI-compatible URL。API key 只从环境变量或本地 env 文件读取，日志和命令摘要必须脱敏。
 - `dataset`: `simulated`、`openqa`、`line_by_line`、`random`。首次测试优先使用 `simulated`，它会生成本地 openqa JSONL，避免外部数据集下载。
-- `token_accounting`: `mode=auto|api_usage|tokenizer`，`on_missing_usage=fail|fallback_tokenizer|skip_token_metrics`。默认 `auto + fallback_tokenizer`。
-- `targets`: 成功率、QPS、输出吞吐、平均/P95/P99 TTFT、TPOT、E2E 延迟目标。报告必须展示目标、实测值、差距和达标状态。
-- `scenarios`: `smoke`、`gradient`、`sla`、`stability`、`length_matrix` 的开关和参数。
+- `token_accounting`: 菜单用编号选择 `auto|api_usage|tokenizer`，usage 缺失策略用编号选择 `fail|fallback_tokenizer|skip_token_metrics`。默认 `auto + fallback_tokenizer`。
+- `targets`: 成功率、QPS、输出吞吐、平均/P95/P99 TTFT、TPOT、E2E 延迟目标。菜单会逐项询问常用目标，报告必须展示目标、实测值、差距和达标状态。
+- `scenarios`: `smoke`、`gradient`、`sla`、`stability`、`length_matrix` 的开关和参数。并发梯度支持推荐列表、手动列表、起止步长、起止档位数量、倍增；每档请求数支持公式、固定值、手动配对列表。
 
 ## EvalScope Perf Rules
 

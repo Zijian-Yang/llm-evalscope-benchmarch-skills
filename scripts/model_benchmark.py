@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -632,34 +632,329 @@ def prompt_value(label: str, default: Any) -> Any:
     return parse_scalar(raw)
 
 
+def prompt_text(label: str, default: Optional[str] = None) -> str:
+    value = prompt_value(label, default or "")
+    return "" if value is None else str(value).strip()
+
+
+def prompt_number(label: str, default: Any, cast=float, allow_null: bool = False) -> Any:
+    while True:
+        value = prompt_value(label, default)
+        if allow_null and value in {"", None, "null", "none"}:
+            return None
+        try:
+            return cast(value)
+        except (TypeError, ValueError):
+            print("请输入数字；直接回车使用默认值。")
+
+
+def prompt_optional_number(label: str, default: Any = None) -> Optional[float]:
+    value = prompt_value(label, default)
+    if value in {"", None, "null", "none"}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        print("输入不是数字，已按未配置处理。")
+        return None
+
+
+def prompt_yes_no(label: str, default: bool) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    try:
+        raw = input(f"{label} [{suffix}]: ").strip().lower()
+    except EOFError:
+        return default
+    if raw == "":
+        return default
+    return raw in {"y", "yes", "1", "true", "是", "好", "启用"}
+
+
+def choose_option(title: str, options: List[Tuple[str, str, str]], default_value: str) -> str:
+    print(f"\n{title}")
+    for idx, (_value, label, description) in enumerate(options, 1):
+        default_mark = "（默认）" if _value == default_value else ""
+        print(f"  {idx}. {label}{default_mark} - {description}")
+    default_idx = next((idx for idx, item in enumerate(options, 1) if item[0] == default_value), 1)
+    while True:
+        try:
+            raw = input(f"请选择 1-{len(options)} [{default_idx}]: ").strip()
+        except EOFError:
+            return default_value
+        if raw == "":
+            return default_value
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return options[int(raw) - 1][0]
+        print("无效选项，请输入编号。")
+
+
+def parse_int_values(value: Any) -> List[int]:
+    if isinstance(value, list):
+        return [int(item) for item in value]
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            parsed = parse_scalar(text)
+            return parse_int_values(parsed)
+        return [int(item.strip()) for item in text.split(",") if item.strip()]
+    return [int(value)]
+
+
+def unique_sorted(values: Iterable[int]) -> List[int]:
+    return sorted({int(value) for value in values if int(value) > 0})
+
+
+def build_parallel_values(mode: str, current: List[int], start: int, end: int, step: int = 1, count: int = 5, multiplier: float = 2.0) -> List[int]:
+    if mode == "custom":
+        return unique_sorted(current)
+    if mode == "step":
+        if step <= 0:
+            step = 1
+        return list(range(start, end + 1, step))
+    if mode == "count":
+        if count <= 1:
+            return [start]
+        if end < start:
+            start, end = end, start
+        span = end - start
+        return unique_sorted(round(start + span * idx / (count - 1)) for idx in range(count))
+    if mode == "multiply":
+        values = []
+        cur = max(1, start)
+        multiplier = max(1.1, multiplier)
+        while cur <= end:
+            values.append(cur)
+            nxt = int(math.ceil(cur * multiplier))
+            if nxt <= cur:
+                nxt = cur + 1
+            cur = nxt
+        if values[-1] != end:
+            values.append(end)
+        return unique_sorted(values)
+    return unique_sorted(current)
+
+
+def configure_dataset(base: Dict[str, Any]) -> None:
+    dataset_options = [
+        ("simulated", "内置模拟数据", "首次冒烟和流程验证推荐；自动生成 openqa JSONL，不需要外部下载。"),
+        ("openqa", "自定义 OpenQA JSONL", "文件每行 JSON，包含 question 字段；最贴近真实业务问答。"),
+        ("line_by_line", "逐行 TXT", "文件每行一个 prompt；适合快速拿业务问题清单压测。"),
+        ("convert", "自动转换 JSONL/TXT", "支持 messages、question、text、prompt 或 TXT，转换成 openqa 后压测。"),
+        ("random", "随机 token 数据", "用于固定输入长度压测；必须配置 tokenizer。"),
+    ]
+    selected = choose_option("数据集类型", dataset_options, base["dataset"].get("type", "simulated"))
+    if selected == "simulated":
+        base["dataset"]["type"] = "simulated"
+        base["dataset"]["path"] = prompt_text("模拟数据输出路径", base["dataset"].get("path", "outputs/simulated_openqa.jsonl"))
+        base["dataset"]["simulated_count"] = int(prompt_number("模拟样本条数", base["dataset"].get("simulated_count", 12), int))
+        base["dataset"]["simulated_prompt_chars"] = int(prompt_number("每条模拟 prompt 约多少字符", base["dataset"].get("simulated_prompt_chars", 240), int))
+        return
+
+    if selected == "openqa":
+        base["dataset"]["type"] = "openqa"
+        base["dataset"]["path"] = prompt_text("OpenQA JSONL 路径（每行含 question 字段）", base["dataset"].get("path", ""))
+        return
+
+    if selected == "line_by_line":
+        base["dataset"]["type"] = "line_by_line"
+        while True:
+            path = prompt_text("TXT 数据集路径（每行一个 prompt，必填）", base["dataset"].get("path", ""))
+            if path:
+                base["dataset"]["path"] = path
+                return
+            print("line_by_line 模式必须提供数据集路径。")
+
+    if selected == "convert":
+        source = prompt_text("源数据路径（JSONL 或 TXT）", "")
+        fmt = choose_option(
+            "源数据格式",
+            [
+                ("auto", "自动识别", "根据首行字段自动判断 messages/openqa/text/TXT。"),
+                ("messages", "OpenAI messages", "每行包含 messages 数组。"),
+                ("openqa", "OpenQA question", "每行包含 question 字段。"),
+                ("text", "text/prompt", "每行包含 text 或 prompt 字段。"),
+            ],
+            "auto",
+        )
+        output = prompt_text("转换后 openqa 输出路径", "outputs/converted_openqa.jsonl")
+        if source and Path(source).expanduser().exists():
+            total, success, failed = convert_to_openqa(Path(source).expanduser(), project_path(output), fmt)
+            print(f"已转换数据集：总计 {total}，成功 {success}，失败 {failed}。")
+        else:
+            print("源文件暂不存在，已仅写入目标配置；运行前请先转换或补齐文件。")
+        base["dataset"]["type"] = "openqa"
+        base["dataset"]["path"] = output
+        return
+
+    base["dataset"]["type"] = "random"
+    base["dataset"]["random_prompt_tokens"] = int(prompt_number("随机输入长度 tokens", base["dataset"].get("random_prompt_tokens", 512), int))
+    base["dataset"]["prefix_length"] = int(prompt_number("固定 prefix 长度 tokens", base["dataset"].get("prefix_length", 0), int))
+
+
+def configure_targets(base: Dict[str, Any]) -> None:
+    print("\n目标指标（可直接回车跳过；报告会展示目标差距）")
+    base["targets"]["success_rate_pct"] = float(prompt_number("目标成功率(%)", base["targets"].get("success_rate_pct", 99), float))
+    base["targets"]["qps"] = prompt_optional_number("目标 QPS(req/s)", base["targets"].get("qps"))
+    base["targets"]["output_tps"] = prompt_optional_number("目标输出吞吐(tok/s)", base["targets"].get("output_tps"))
+    base["targets"]["avg_ttft_ms"] = prompt_optional_number("目标平均 TTFT(ms)", base["targets"].get("avg_ttft_ms"))
+    base["targets"]["p95_ttft_ms"] = prompt_optional_number("目标 P95 TTFT(ms)", base["targets"].get("p95_ttft_ms"))
+    base["targets"]["p99_ttft_ms"] = prompt_optional_number("目标 P99 TTFT(ms)", base["targets"].get("p99_ttft_ms"))
+    base["targets"]["avg_tpot_ms"] = prompt_optional_number("目标平均 TPOT(ms)", base["targets"].get("avg_tpot_ms"))
+    base["targets"]["avg_latency_ms"] = prompt_optional_number("目标平均端到端延迟(ms)", base["targets"].get("avg_latency_ms"))
+    base["targets"]["p95_latency_ms"] = prompt_optional_number("目标 P95 端到端延迟(ms)", base["targets"].get("p95_latency_ms"))
+    base["targets"]["p99_latency_ms"] = prompt_optional_number("目标 P99 端到端延迟(ms)", base["targets"].get("p99_latency_ms"))
+
+
+def configure_gradient(base: Dict[str, Any]) -> None:
+    gradient = base["scenarios"]["gradient"]
+    gradient["enabled"] = prompt_yes_no("启用并发梯度压测", bool(gradient.get("enabled", True)))
+    if not gradient["enabled"]:
+        return
+
+    current = numeric_list(gradient.get("parallels", [1, 2, 5, 8, 10, 15, 20]))
+    mode = choose_option(
+        "并发梯度生成方式",
+        [
+            ("default", "使用推荐列表", f"当前默认 {current}，适合首次探测。"),
+            ("custom", "手动输入列表", "例如 1,2,5,10,20,50。"),
+            ("step", "起止范围 + 固定步长", "例如 1 到 100，每 5 个并发测一次。"),
+            ("count", "起止范围 + 测试档位数量", "例如 1 到 100，共 8 档，自动均匀取点。"),
+            ("multiply", "起点 + 终点 + 倍增系数", "例如 1 开始，每次 x2，直到 128。"),
+        ],
+        "default",
+    )
+    if mode == "custom":
+        current = parse_int_values(prompt_value("并发列表，逗号分隔", ",".join(str(item) for item in current)))
+    elif mode in {"step", "count", "multiply"}:
+        start = int(prompt_number("起始并发", current[0], int))
+        end = int(prompt_number("结束并发", current[-1], int))
+        if mode == "step":
+            step = int(prompt_number("并发步长", 5, int))
+            current = build_parallel_values("step", current, start, end, step=step)
+        elif mode == "count":
+            count = int(prompt_number("测试档位数量", len(current), int))
+            current = build_parallel_values("count", current, start, end, count=count)
+        else:
+            multiplier = float(prompt_number("倍增系数", 2.0, float))
+            current = build_parallel_values("multiply", current, start, end, multiplier=multiplier)
+    gradient["parallels"] = current
+
+    request_mode = choose_option(
+        "每个并发档位请求数",
+        [
+            ("formula", "按公式计算", "number = max(最小请求数, 并发 * 倍数)。"),
+            ("fixed", "每档固定请求数", "所有并发档位使用相同 number。"),
+            ("custom", "手动输入配对列表", "请求数列表必须和并发列表长度一致。"),
+        ],
+        "formula",
+    )
+    gradient.pop("numbers", None)
+    if request_mode == "formula":
+        gradient["number_multiplier"] = int(prompt_number("请求数倍数", gradient.get("number_multiplier", 10), int))
+        gradient["min_number"] = int(prompt_number("每档最小请求数", gradient.get("min_number", 50), int))
+    elif request_mode == "fixed":
+        fixed = int(prompt_number("每档固定请求数", gradient.get("min_number", 50), int))
+        gradient["numbers"] = [fixed for _ in current]
+        gradient["min_number"] = fixed
+    else:
+        while True:
+            numbers = parse_int_values(prompt_value("请求数列表，逗号分隔", ",".join(str(max(50, p * 10)) for p in current)))
+            if len(numbers) == len(current):
+                gradient["numbers"] = numbers
+                break
+            print("请求数列表长度必须和并发列表一致。")
+
+    gradient["max_tokens"] = int(prompt_number("每次请求 max_tokens", gradient.get("max_tokens", 128), int))
+    gradient["sleep_interval"] = int(prompt_number("并发档位之间等待秒数", gradient.get("sleep_interval", 5), int))
+
+
+def configure_optional_scenarios(base: Dict[str, Any]) -> None:
+    smoke = base["scenarios"]["smoke"]
+    print("\n冒烟测试配置")
+    smoke["enabled"] = prompt_yes_no("启用真实 API 冒烟测试", bool(smoke.get("enabled", True)))
+    if smoke["enabled"]:
+        smoke["parallel"] = int(prompt_number("冒烟并发", smoke.get("parallel", 1), int))
+        smoke["number"] = int(prompt_number("冒烟请求数", smoke.get("number", 3), int))
+        smoke["max_tokens"] = int(prompt_number("冒烟 max_tokens", smoke.get("max_tokens", 32), int))
+
+    configure_gradient(base)
+
+    sla = base["scenarios"]["sla"]
+    sla["enabled"] = prompt_yes_no("启用 SLA 自动调优", bool(sla.get("enabled", False)))
+    if sla["enabled"]:
+        sla["variable"] = choose_option(
+            "SLA 调优变量",
+            [("parallel", "并发数", "寻找满足目标的最大并发。"), ("rate", "请求速率", "寻找满足目标的最大请求速率。")],
+            sla.get("variable", "parallel"),
+        )
+        sla["lower_bound"] = int(prompt_number("SLA 搜索下界", sla.get("lower_bound", 1), int))
+        sla["upper_bound"] = int(prompt_number("SLA 搜索上界", sla.get("upper_bound", 100), int))
+        sla["number_multiplier"] = float(prompt_number("SLA 每档请求数倍数", sla.get("number_multiplier", 5), float))
+        sla["num_runs"] = int(prompt_number("SLA 每档重复次数", sla.get("num_runs", 3), int))
+
+    stability = base["scenarios"]["stability"]
+    stability["enabled"] = prompt_yes_no("启用稳定性测试", bool(stability.get("enabled", False)))
+    if stability["enabled"]:
+        stability["parallel"] = int(prompt_number("稳定性测试并发", stability.get("parallel", 10), int))
+        stability["duration_minutes"] = float(prompt_number("稳定性测试总时长(分钟)", stability.get("duration_minutes", 30), float))
+        stability["window_minutes"] = float(prompt_number("采样窗口(分钟)", stability.get("window_minutes", 5), float))
+        stability["max_tokens"] = int(prompt_number("稳定性 max_tokens", stability.get("max_tokens", 128), int))
+
+    matrix = base["scenarios"]["length_matrix"]
+    matrix["enabled"] = prompt_yes_no("启用输入/输出长度矩阵测试", bool(matrix.get("enabled", False)))
+    if matrix["enabled"]:
+        matrix["parallel"] = int(prompt_number("长度矩阵并发", matrix.get("parallel", 5), int))
+        matrix["number"] = int(prompt_number("每个长度组合请求数", matrix.get("number", 100), int))
+        matrix["input_tokens"] = parse_int_values(prompt_value("输入长度 tokens 列表", matrix.get("input_tokens", [100, 500, 1000])))
+        matrix["output_tokens"] = parse_int_values(prompt_value("输出 max_tokens 列表", matrix.get("output_tokens", [32, 128, 256])))
+
+
 def run_menu(args: argparse.Namespace) -> int:
     base = copy.deepcopy(DEFAULT_CONFIG)
     if args.base_config and Path(args.base_config).exists():
         base = load_config(args.base_config)
 
-    print("Model Benchmark 配置向导。直接回车使用默认值。")
-    base["model"]["name"] = prompt_value("模型名称", base["model"]["name"])
-    base["model"]["api_url"] = prompt_value("OpenAI-compatible API URL", base["model"]["api_url"])
-    base["model"]["api_key_env"] = prompt_value("API Key 环境变量名", base["model"]["api_key_env"])
-    base["environment"]["env_file"] = prompt_value("本地 env 文件路径（用于首次使用保存 key）", base["environment"].get("env_file"))
+    print("Model Benchmark 配置向导")
+    print("说明：方括号中是默认值，直接回车会使用默认；固定选项请输入编号。")
+    print("\n模型连接")
+    base["model"]["name"] = prompt_text("模型名称", base["model"]["name"])
+    base["model"]["api_url"] = prompt_text("OpenAI-compatible API URL", base["model"]["api_url"])
+    base["model"]["api_key_env"] = prompt_text("API Key 环境变量名", base["model"]["api_key_env"])
+    base["environment"]["env_file"] = prompt_text("本地 env 文件路径（可保存 key，默认不提交）", base["environment"].get("env_file"))
+    print("API Key 用于真实请求鉴权。若系统环境变量已设置可留空；若输入，只会写入本地 env 文件，不会写入 YAML。")
     try:
-        secret = getpass.getpass("API Key（可留空；不会写入 YAML，会写入 env 文件）: ").strip()
+        secret = getpass.getpass("API Key（可留空）: ").strip()
     except (EOFError, KeyboardInterrupt):
         secret = ""
-    base["model"]["tokenizer_path"] = prompt_value("Tokenizer 路径或 ModelScope ID", base["model"].get("tokenizer_path"))
-    base["dataset"]["type"] = prompt_value("数据集类型 simulated/openqa/line_by_line/random", base["dataset"]["type"])
-    base["dataset"]["path"] = prompt_value("数据集路径", base["dataset"]["path"])
-    base["token_accounting"]["mode"] = prompt_value("Token 计量模式 auto/api_usage/tokenizer", base["token_accounting"]["mode"])
-    base["token_accounting"]["on_missing_usage"] = prompt_value(
-        "usage 缺失策略 fail/fallback_tokenizer/skip_token_metrics",
+
+    base["token_accounting"]["mode"] = choose_option(
+        "Token 计量模式",
+        [
+            ("auto", "自动", "优先使用 API usage；缺失时按下面策略处理。"),
+            ("api_usage", "只用 API usage", "最准确，但服务不返回 usage 时可能失败或跳过 token 指标。"),
+            ("tokenizer", "使用 tokenizer 估算", "适合 API 不返回 usage；需要 tokenizer 路径或 ModelScope ID。"),
+        ],
+        base["token_accounting"].get("mode", "auto"),
+    )
+    base["token_accounting"]["on_missing_usage"] = choose_option(
+        "API usage 缺失时怎么办",
+        [
+            ("fallback_tokenizer", "回退 tokenizer", "推荐；需要 tokenizer_path，报告中 token 指标仍可用。"),
+            ("skip_token_metrics", "跳过 token 指标", "只看 QPS/TTFT/E2E；报告会标注 token/TPOT 不作为结论。"),
+            ("fail", "失败并停止", "适合强制要求 API 返回 usage 的验收。"),
+        ],
         base["token_accounting"]["on_missing_usage"],
     )
-    base["targets"]["success_rate_pct"] = prompt_value("目标成功率(%)", base["targets"]["success_rate_pct"])
-    base["targets"]["avg_ttft_ms"] = prompt_value("目标平均 TTFT(ms, 可为 null)", base["targets"]["avg_ttft_ms"])
-    base["targets"]["avg_tpot_ms"] = prompt_value("目标平均 TPOT(ms, 可为 null)", base["targets"]["avg_tpot_ms"])
-    base["scenarios"]["gradient"]["parallels"] = prompt_value(
-        "并发梯度，例如 [1, 2, 5, 10]", base["scenarios"]["gradient"]["parallels"]
+    needs_tokenizer = (
+        base["token_accounting"]["mode"] == "tokenizer"
+        or base["token_accounting"]["on_missing_usage"] == "fallback_tokenizer"
     )
+    tokenizer_label = "Tokenizer 路径或 ModelScope ID" + ("（当前策略建议填写）" if needs_tokenizer else "（可选）")
+    base["model"]["tokenizer_path"] = prompt_text(tokenizer_label, base["model"].get("tokenizer_path"))
+
+    configure_dataset(base)
+    configure_targets(base)
+    configure_optional_scenarios(base)
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

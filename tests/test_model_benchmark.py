@@ -200,6 +200,12 @@ target:
         self.assertNotIn("sk-secret-value", text)
         self.assertIn("Bearer sk-s", text)
 
+    def test_build_parallel_values(self):
+        self.assertEqual(mb.build_parallel_values("step", [1], 1, 10, step=3), [1, 4, 7, 10])
+        self.assertEqual(mb.build_parallel_values("count", [1], 1, 10, count=4), [1, 4, 7, 10])
+        self.assertEqual(mb.build_parallel_values("multiply", [1], 1, 10, multiplier=2), [1, 2, 4, 8, 10])
+        self.assertEqual(mb.parse_int_values("1, 2, 5"), [1, 2, 5])
+
     def test_main_without_args_defaults_to_menu(self):
         original = mb.run_menu
         calls = []
