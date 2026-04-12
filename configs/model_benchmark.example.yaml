@@ -1,7 +1,8 @@
 environment:
   venv_path: .venv-model-benchmark
   env_file: .model_benchmark.env
-  install_source: local
+  install_source: pip
+  evalscope_extras: perf
   pip_index_url: https://pypi.tuna.tsinghua.edu.cn/simple
   pip_trusted_host: pypi.tuna.tsinghua.edu.cn
   modelscope_cache: .cache/modelscope

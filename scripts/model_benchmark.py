@@ -37,7 +37,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "environment": {
         "venv_path": ".venv-model-benchmark",
         "env_file": ".model_benchmark.env",
-        "install_source": "local",
+        "install_source": "pip",
+        "evalscope_extras": "perf",
         "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
         "pip_trusted_host": "pypi.tuna.tsinghua.edu.cn",
         "modelscope_cache": ".cache/modelscope",
@@ -605,12 +606,14 @@ def run_bootstrap(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
 
-    install_source = config["environment"].get("install_source", "local")
+    install_source = config["environment"].get("install_source", "pip")
+    extras = str(config["environment"].get("evalscope_extras") or "perf").strip()
+    package_name = f"evalscope[{extras}]" if extras else "evalscope"
     if install_source == "local" and (PROJECT_ROOT / "evalscope" / "pyproject.toml").exists():
-        package_spec = str(PROJECT_ROOT / "evalscope") + "[perf]"
+        package_spec = str(PROJECT_ROOT / "evalscope") + (f"[{extras}]" if extras else "")
         install_cmd = [str(venv_py), "-m", "pip", "install", "-e", package_spec]
     else:
-        install_cmd = [str(venv_py), "-m", "pip", "install", "-U", "evalscope[perf]"]
+        install_cmd = [str(venv_py), "-m", "pip", "install", "-U", package_name]
     if index_url:
         install_cmd.extend(["-i", index_url])
     if trusted_host:

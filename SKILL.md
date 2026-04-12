@@ -7,7 +7,7 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
 
 使用这个 skill 时，把根目录的 `scripts/model_benchmark.py` 作为主入口。它负责环境检测、venv 安装、配置向导、EvalScope perf 执行、usage 缺失容错和报告生成；旧脚本 `benchmark.sh`、`stability_test.sh`、`sla_autotune.py`、`generate_report.py`、`convert_dataset.py` 只是兼容包装。
 
-官方 EvalScope skill 位于 `evalscope/skills/evalscope`。遇到能力评测、benchmark 发现、结果可视化、EvalScope 参数细节时，优先读取并复用官方 skill，尤其是 `perf-reference.md`；不要在本 skill 中重复实现 `evalscope eval`、`benchmark-info` 或 `evalscope app`。
+本仓库已内置 EvalScope 官方 skill 参考，位于 `references/evalscope-official/`。遇到能力评测、benchmark 发现、结果可视化、EvalScope 参数细节时，直接读取这些本地 reference 并构造命令，不要求用户下载官方仓库或初始化 submodule。
 
 ## Core Workflow
 
@@ -20,7 +20,7 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
    ```bash
    python3 scripts/model_benchmark.py bootstrap --config configs/model_benchmark.example.yaml
    ```
-   默认使用项目内 `.venv-model-benchmark`，国内 PyPI 镜像，优先从本仓库 `evalscope` 源码安装 `evalscope[perf]`。macOS 只使用现有 Python 或提示安装 Homebrew/Python；Ubuntu 可提示用户安装 `python3-venv`、`python3-pip`。
+   默认使用项目内 `.venv-model-benchmark` 和国内 PyPI 镜像安装 `evalscope[perf]`。macOS 只使用现有 Python 或提示安装 Homebrew/Python；Ubuntu 可提示用户安装 `python3-venv`、`python3-pip`。如果用户需要 OpenCompass/VLMEval/RAG/App 等全量后端，可把配置中的 `environment.evalscope_extras` 改为 `all` 后重新 bootstrap。
 
 3. 生成或编辑配置：
    ```bash

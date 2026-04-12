@@ -11,7 +11,4 @@ outputs/
 *.env
 .model_benchmark.env
 
-evalscope/*
-!evalscope/skills/
-!evalscope/skills/evalscope/
-!evalscope/skills/evalscope/**
+evalscope/
