@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import getpass
 import json
 import math
 import os
@@ -358,6 +357,20 @@ def write_env_secret(env_file: Path, env_name: str, secret: str) -> None:
     existing[env_name] = secret
     lines = [f"{key}={value}" for key, value in sorted(existing.items())]
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        env_file.chmod(0o600)
+    except OSError:
+        pass
+
+
+def ensure_env_placeholder(env_file: Path, env_name: str) -> None:
+    if get_secret_from_env_or_file({"environment": {"env_file": str(env_file)}}, env_name):
+        return
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_env_file(env_file)
+    if env_name not in existing:
+        with env_file.open("a", encoding="utf-8") as handle:
+            handle.write(f"{env_name}=\n")
     try:
         env_file.chmod(0o600)
     except OSError:
@@ -787,6 +800,8 @@ def configure_dataset(base: Dict[str, Any]) -> None:
         return
 
     base["dataset"]["type"] = "random"
+    if not base["model"].get("tokenizer_path"):
+        base["model"]["tokenizer_path"] = prompt_text("random 数据集必须填写 tokenizer 路径或 ModelScope ID", "Qwen/Qwen3-0.6B")
     base["dataset"]["random_prompt_tokens"] = int(prompt_number("随机输入长度 tokens", base["dataset"].get("random_prompt_tokens", 512), int))
     base["dataset"]["prefix_length"] = int(prompt_number("固定 prefix 长度 tokens", base["dataset"].get("prefix_length", 0), int))
 
@@ -870,8 +885,9 @@ def configure_gradient(base: Dict[str, Any]) -> None:
 
 def configure_optional_scenarios(base: Dict[str, Any]) -> None:
     smoke = base["scenarios"]["smoke"]
-    print("\n冒烟测试配置")
-    smoke["enabled"] = prompt_yes_no("启用真实 API 冒烟测试", bool(smoke.get("enabled", True)))
+    print("\n连接验证 / 小样本试跑")
+    print("说明：这里只发少量请求，用来确认 API Key、URL、模型名、返回格式和 token 计量策略正常，避免正式压测跑到一半才失败。")
+    smoke["enabled"] = prompt_yes_no("启用连接验证/小样本试跑（推荐）", bool(smoke.get("enabled", True)))
     if smoke["enabled"]:
         smoke["parallel"] = int(prompt_number("冒烟并发", smoke.get("parallel", 1), int))
         smoke["number"] = int(prompt_number("冒烟请求数", smoke.get("number", 3), int))
@@ -903,6 +919,8 @@ def configure_optional_scenarios(base: Dict[str, Any]) -> None:
     matrix = base["scenarios"]["length_matrix"]
     matrix["enabled"] = prompt_yes_no("启用输入/输出长度矩阵测试", bool(matrix.get("enabled", False)))
     if matrix["enabled"]:
+        if not base["model"].get("tokenizer_path"):
+            base["model"]["tokenizer_path"] = prompt_text("长度矩阵使用 random 数据集，必须填写 tokenizer 路径或 ModelScope ID", "Qwen/Qwen3-0.6B")
         matrix["parallel"] = int(prompt_number("长度矩阵并发", matrix.get("parallel", 5), int))
         matrix["number"] = int(prompt_number("每个长度组合请求数", matrix.get("number", 100), int))
         matrix["input_tokens"] = parse_int_values(prompt_value("输入长度 tokens 列表", matrix.get("input_tokens", [100, 500, 1000])))
@@ -919,13 +937,9 @@ def run_menu(args: argparse.Namespace) -> int:
     print("\n模型连接")
     base["model"]["name"] = prompt_text("模型名称", base["model"]["name"])
     base["model"]["api_url"] = prompt_text("OpenAI-compatible API URL", base["model"]["api_url"])
-    base["model"]["api_key_env"] = prompt_text("API Key 环境变量名", base["model"]["api_key_env"])
-    base["environment"]["env_file"] = prompt_text("本地 env 文件路径（可保存 key，默认不提交）", base["environment"].get("env_file"))
-    print("API Key 用于真实请求鉴权。若系统环境变量已设置可留空；若输入，只会写入本地 env 文件，不会写入 YAML。")
-    try:
-        secret = getpass.getpass("API Key（可留空）: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        secret = ""
+    base["environment"]["env_file"] = base["environment"].get("env_file") or ".model_benchmark.env"
+    print(f"API Key 默认从本地 `{base['environment']['env_file']}` 的 `{base['model']['api_key_env']}` 读取，不会写入 YAML。")
+    secret = ""
 
     base["token_accounting"]["mode"] = choose_option(
         "Token 计量模式",
@@ -949,8 +963,11 @@ def run_menu(args: argparse.Namespace) -> int:
         base["token_accounting"]["mode"] == "tokenizer"
         or base["token_accounting"]["on_missing_usage"] == "fallback_tokenizer"
     )
-    tokenizer_label = "Tokenizer 路径或 ModelScope ID" + ("（当前策略建议填写）" if needs_tokenizer else "（可选）")
-    base["model"]["tokenizer_path"] = prompt_text(tokenizer_label, base["model"].get("tokenizer_path"))
+    if needs_tokenizer:
+        base["model"]["tokenizer_path"] = prompt_text("Tokenizer 路径或 ModelScope ID（当前策略建议填写）", base["model"].get("tokenizer_path"))
+    else:
+        base["model"]["tokenizer_path"] = None
+        print("当前 token 计量策略不需要 tokenizer，已跳过 tokenizer 配置。")
 
     configure_dataset(base)
     configure_targets(base)
@@ -964,6 +981,11 @@ def run_menu(args: argparse.Namespace) -> int:
         if env_file:
             write_env_secret(env_file, base["model"]["api_key_env"], secret)
             print(f"API Key 已保存到: {env_file} (0600)")
+    else:
+        env_file = configured_env_file(base)
+        if env_file:
+            ensure_env_placeholder(env_file, base["model"]["api_key_env"])
+            print(f"本地 key 文件已准备: {env_file}。运行前请填写 {base['model']['api_key_env']}。")
     print(f"配置已写入: {output}")
     return 0
 

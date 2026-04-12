@@ -28,14 +28,14 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
    # 或显式指定输出路径
    python3 scripts/model_benchmark.py menu --output configs/model_benchmark.local.yaml
    ```
-   配置文件是最终可复现入口。菜单会引导第一次使用者填写模型名、端点 URL、API key、数据集、usage/tokenizer 策略、目标指标和测试场景。API key 不写入 YAML；如用户直接输入 key，会保存到 `environment.env_file` 指定的本地 env 文件，默认 `.model_benchmark.env`，权限设为 `0600`。
+   配置文件是最终可复现入口。菜单会引导第一次使用者填写模型名、端点 URL、数据集、usage/tokenizer 策略、目标指标和测试场景。API key 默认从本地 `.model_benchmark.env` 的 `DASHSCOPE_API_KEY` 读取，不写入 YAML；菜单会自动准备这个本地 env 文件。
 
-4. 先跑真实 API 冒烟测试：
+4. 先跑连接验证/小样本试跑：
    ```bash
    export DASHSCOPE_API_KEY=...
    python3 scripts/model_benchmark.py run --config configs/model_benchmark.local.yaml --scenario smoke
    ```
-   默认模型是 `qwen3.6-plus`，默认 endpoint 是 DashScope OpenAI-compatible URL，默认从 `DASHSCOPE_API_KEY` 读取密钥。若密钥缺失，不要假装通过，明确说明真实验收被凭证阻塞。
+   默认模型是 `qwen3.6-plus`，默认 endpoint 是 DashScope OpenAI-compatible URL，默认从 `.model_benchmark.env` 或 `DASHSCOPE_API_KEY` 读取密钥。这个小样本试跑用于确认 API Key、URL、模型名、返回格式和 token 计量策略正常，避免正式压测跑到一半才失败。若密钥缺失，不要假装通过，明确说明真实验收被凭证阻塞。
 
 5. 冒烟通过后运行正式压测：
    ```bash
