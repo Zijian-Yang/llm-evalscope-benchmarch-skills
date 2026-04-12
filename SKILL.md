@@ -28,7 +28,7 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
    # 或显式指定输出路径
    python3 scripts/model_benchmark.py menu --output configs/model_benchmark.local.yaml
    ```
-   配置文件是最终可复现入口。菜单会引导第一次使用者填写模型名、端点 URL、数据集、usage/tokenizer 策略、目标指标和测试场景。API key 默认从本地 `.model_benchmark.env` 的 `DASHSCOPE_API_KEY` 读取，不写入 YAML；菜单会自动准备这个本地 env 文件。
+   配置文件是最终可复现入口。菜单会引导第一次使用者填写模型名、端点 URL、API key、数据集、usage/tokenizer 策略、目标指标和测试场景。API key 只保存到本地 `.model_benchmark.env` 的 `DASHSCOPE_API_KEY`，不写入 YAML；用户也可以留空，之后手动编辑 env 文件。
 
 4. 先跑连接验证/小样本试跑：
    ```bash

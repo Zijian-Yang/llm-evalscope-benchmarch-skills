@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import getpass
 import json
 import math
 import os
@@ -938,8 +939,11 @@ def run_menu(args: argparse.Namespace) -> int:
     base["model"]["name"] = prompt_text("模型名称", base["model"]["name"])
     base["model"]["api_url"] = prompt_text("OpenAI-compatible API URL", base["model"]["api_url"])
     base["environment"]["env_file"] = base["environment"].get("env_file") or ".model_benchmark.env"
-    print(f"API Key 默认从本地 `{base['environment']['env_file']}` 的 `{base['model']['api_key_env']}` 读取，不会写入 YAML。")
-    secret = ""
+    print(f"API Key 将保存到本地 `{base['environment']['env_file']}` 的 `{base['model']['api_key_env']}`，不会写入 YAML。")
+    try:
+        secret = getpass.getpass("请输入 API Key（可留空，稍后手动填 env 文件）: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        secret = ""
 
     base["token_accounting"]["mode"] = choose_option(
         "Token 计量模式",
