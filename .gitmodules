@@ -1,0 +1,3 @@
+[submodule "evalscope"]
+	path = evalscope
+	url = https://github.com/modelscope/evalscope.git

@@ -1,0 +1,84 @@
+environment:
+  venv_path: .venv-model-benchmark
+  env_file: .model_benchmark.env
+  install_source: local
+  pip_index_url: https://pypi.tuna.tsinghua.edu.cn/simple
+  pip_trusted_host: pypi.tuna.tsinghua.edu.cn
+  modelscope_cache: .cache/modelscope
+  hf_endpoint: https://hf-mirror.com
+
+model:
+  api: openai
+  name: qwen3.6-plus
+  api_url: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  api_key_env: DASHSCOPE_API_KEY
+  tokenizer_path: Qwen/Qwen3-0.6B
+
+dataset:
+  type: simulated
+  path: outputs/simulated_openqa.jsonl
+  simulated_count: 12
+  simulated_prompt_chars: 240
+  random_prompt_tokens: 512
+  output_tokens: 128
+  prefix_length: 0
+
+token_accounting:
+  mode: auto
+  on_missing_usage: fallback_tokenizer
+
+targets:
+  success_rate_pct: 99
+  qps: null
+  output_tps: null
+  avg_ttft_ms: null
+  p95_ttft_ms: null
+  p99_ttft_ms: null
+  avg_tpot_ms: null
+  avg_latency_ms: null
+  p95_latency_ms: null
+  p99_latency_ms: null
+
+scenarios:
+  smoke:
+    enabled: true
+    parallel: 1
+    number: 3
+    max_tokens: 32
+  gradient:
+    enabled: true
+    parallels: [1, 2, 5, 8, 10, 15, 20]
+    number_multiplier: 10
+    min_number: 50
+    max_tokens: 128
+    sleep_interval: 5
+  sla:
+    enabled: false
+    variable: parallel
+    lower_bound: 1
+    upper_bound: 100
+    number_multiplier: 5
+    num_runs: 3
+  stability:
+    enabled: false
+    parallel: 10
+    duration_minutes: 30
+    window_minutes: 5
+    max_tokens: 128
+  length_matrix:
+    enabled: false
+    parallel: 5
+    number: 100
+    input_tokens: [100, 500, 1000, 2000, 4000]
+    output_tokens: [32, 128, 256, 512]
+
+run:
+  outputs_dir: outputs/model_benchmark
+  connect_timeout: 600
+  read_timeout: 600
+  total_timeout: 21600
+  stream: true
+  temperature: 0.0
+  seed: 42
+  log_every_n_query: 50
+  enable_progress_tracker: true

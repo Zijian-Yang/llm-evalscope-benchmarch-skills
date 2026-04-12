@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+.venv/
+.venv-*/
+.cache/
+outputs/
+
+.env
+*.env
+.model_benchmark.env
+
+evalscope/*
+!evalscope/skills/
+!evalscope/skills/evalscope/
+!evalscope/skills/evalscope/**
