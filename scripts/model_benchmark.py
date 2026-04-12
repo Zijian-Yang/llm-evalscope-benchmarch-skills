@@ -623,7 +623,10 @@ def run_bootstrap(args: argparse.Namespace) -> int:
 
 def prompt_value(label: str, default: Any) -> Any:
     default_text = "" if default is None else str(default)
-    raw = input(f"{label} [{default_text}]: ").strip()
+    try:
+        raw = input(f"{label} [{default_text}]: ").strip()
+    except EOFError:
+        return default
     if raw == "":
         return default
     return parse_scalar(raw)
@@ -1680,6 +1683,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if len(argv) == 0:
+        argv = ["menu", "--output", str(PROJECT_ROOT / "configs" / "model_benchmark.local.yaml")]
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

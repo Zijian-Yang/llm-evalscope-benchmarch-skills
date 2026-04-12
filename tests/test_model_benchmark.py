@@ -200,6 +200,24 @@ target:
         self.assertNotIn("sk-secret-value", text)
         self.assertIn("Bearer sk-s", text)
 
+    def test_main_without_args_defaults_to_menu(self):
+        original = mb.run_menu
+        calls = []
+
+        def fake_menu(args):
+            calls.append(args.output)
+            return 0
+
+        try:
+            mb.run_menu = fake_menu
+            rc = mb.main([])
+        finally:
+            mb.run_menu = original
+
+        self.assertEqual(rc, 0)
+        self.assertTrue(calls)
+        self.assertTrue(calls[0].endswith("configs/model_benchmark.local.yaml"))
+
 
 if __name__ == "__main__":
     unittest.main()

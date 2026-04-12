@@ -24,6 +24,8 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
 
 3. 生成或编辑配置：
    ```bash
+   python3 scripts/model_benchmark.py
+   # 或显式指定输出路径
    python3 scripts/model_benchmark.py menu --output configs/model_benchmark.local.yaml
    ```
    配置文件是最终可复现入口。菜单会引导第一次使用者填写模型名、端点 URL、API key、数据集、usage/tokenizer 策略、目标指标和测试场景。API key 不写入 YAML；如用户直接输入 key，会保存到 `environment.env_file` 指定的本地 env 文件，默认 `.model_benchmark.env`，权限设为 `0600`。
