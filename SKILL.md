@@ -28,7 +28,7 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
    # 或显式指定输出路径
    python3 scripts/model_benchmark.py menu --output configs/model_benchmark.local.yaml
    ```
-   配置文件是最终可复现入口。菜单会引导第一次使用者填写模型名、端点 URL、API key、数据集、usage/tokenizer 策略、目标指标和测试场景。API key 只保存到本地 `.model_benchmark.env` 的 `DASHSCOPE_API_KEY`，不写入 YAML；用户也可以留空，之后手动编辑 env 文件。
+   配置文件是最终可复现入口。菜单会引导第一次使用者填写模型名、端点 URL、API key、数据集、usage/tokenizer 策略和测试场景。API key 只保存到本地 `.model_benchmark.env` 的 `DASHSCOPE_API_KEY`，不写入 YAML；用户也可以留空，之后手动编辑 env 文件。菜单会询问 max_tokens、请求数、并发等关键参数，并在问题里说明用途和取舍。
 
 4. 先跑连接验证/小样本试跑：
    ```bash
@@ -57,7 +57,7 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
 
 - `environment`: venv 路径、env 文件路径、安装源、pip 镜像、ModelScope/HF 镜像设置。国内网络默认使用清华 PyPI 镜像和 `https://hf-mirror.com`。
 - `model`: `api`、`name`、`api_url`、`api_key_env`、`tokenizer_path`。默认端点是阿里云 DashScope OpenAI-compatible URL。API key 只从环境变量或本地 env 文件读取，日志和命令摘要必须脱敏。
-- `dataset`: `simulated`、`openqa`、`line_by_line`、`random`。首次测试优先使用 `simulated`，它会生成本地 openqa JSONL，避免外部数据集下载。
+- `dataset`: `simulated`、`openqa`、`line_by_line`、`random`。首次测试优先使用 `simulated`，它会生成本地 openqa JSONL，避免外部数据集下载。用户指定数据集路径时必须做格式检测并说明是否符合 EvalScope 格式。
 - `token_accounting`: 菜单用编号选择 `auto|api_usage|tokenizer`，usage 缺失策略用编号选择 `fail|fallback_tokenizer|skip_token_metrics`。默认 `auto + fallback_tokenizer`。
 - `targets`: 默认不要求用户填写目标值。报告直接输出一揽子完整性能数据；仅当用户手动编辑 YAML 做 SLA/验收时才使用 targets。
 - `scenarios`: `smoke`、`gradient`、`sla`、`stability`、`length_matrix` 的开关和参数。并发梯度支持推荐列表、手动列表、起止步长、起止档位数量、倍增；每档请求数支持公式、固定值、手动配对列表。
@@ -65,8 +65,14 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
 ## EvalScope Perf Rules
 
 - 使用当前 EvalScope perf 参数语义。输入长度用 `--min-prompt-length` / `--max-prompt-length`；输出长度用 `--min-tokens` / `--max-tokens`。
+- 用户指定数据集时，先检查格式：
+  - `openqa`：JSONL，每行一个 JSON 对象，必须包含非空 `question` 字段。
+  - `line_by_line`：TXT，每行一个 prompt。
+  - 可转换格式：OpenAI `messages` JSONL、含 `text` 或 `prompt` 字段的 JSONL，可先用 `scripts/convert_dataset.py` 转为 openqa。
+  - `random`：不需要数据集文件，但必须提供 tokenizer。
 - `random` 数据集必须有 `tokenizer_path`。如果没有 tokenizer，自动退回 `simulated/openqa`，并在报告或 stderr 中说明。
 - 并发梯度中 `parallel` 和 `number` 必须一一对应；默认请求数为 `max(min_number, parallel * number_multiplier)`。
+- 菜单询问 max_tokens、请求数、并发、稳定性开关等参数时，问题文本必须附带用途说明，例如“越大越慢、成本越高”“太小会导致统计不稳定”。
 - SLA 成功率目标为 100% 且目标能映射为 EvalScope 指标时，使用官方 `--sla-auto-tune`；否则使用本 skill 的有界二分搜索。
 - 对 OpenAI-compatible API 默认注册 `openai_optional_usage` 插件：优先读取 API `usage`；usage 缺失时按配置 fallback 到 tokenizer、失败退出或跳过 token 指标。
 - 空响应不能算成功。自定义插件会把空 `generated_text` 标记失败；`patch_evalscope.py` 只保留为诊断/兼容工具，不作为默认路径修改 site-packages。
@@ -75,7 +81,7 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
 
 报告必须是 Markdown，并包含：
 
-- 测试信息：时间、模型、API、数据集、token 计量策略、结果目录。
+- 测试信息：时间、模型、API、压测数据集名称、配置数据集类型/路径、EvalScope 实际 dataset/dataset_path、token 计量策略、结果目录。
 - 指标覆盖检查：数据量、成功率、QPS、TTFT、TPOT、E2E、ITL、Token 统计是否完整。
 - 结论建议：QPS 峰值、最高成功率、最低平均 E2E 延迟，以及哪些指标没有单请求分位数。
 - 数据量与成功率：场景、并发、总请求、成功、失败、成功率、平均/总输入输出 tokens。

@@ -17,6 +17,7 @@ model:
 
 dataset:
   type: simulated
+  name: simulated_openqa
   path: outputs/simulated_openqa.jsonl
   simulated_count: 12
   simulated_prompt_chars: 240

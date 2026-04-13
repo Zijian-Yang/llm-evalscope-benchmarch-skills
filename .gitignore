@@ -7,6 +7,8 @@ __pycache__/
 .cache/
 outputs/
 configs/model_benchmark.local.yaml
+*.zip
+combined_2k_evalscope.jsonl
 
 .env
 *.env

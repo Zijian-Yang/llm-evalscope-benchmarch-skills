@@ -53,6 +53,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "dataset": {
         "type": "simulated",
+        "name": "simulated_openqa",
         "path": "outputs/simulated_openqa.jsonl",
         "simulated_count": 12,
         "simulated_prompt_chars": 240,
@@ -748,6 +749,122 @@ def build_parallel_values(mode: str, current: List[int], start: int, end: int, s
     return unique_sorted(current)
 
 
+SUPPORTED_EVALSCOPE_DATASET_FORMATS = """EvalScope perf 常用数据集格式：
+1. openqa JSONL：每行一个 JSON 对象，必须包含非空 `question` 字段，例如 {"question": "请介绍一下..."}。
+2. line_by_line TXT：纯文本文件，每行一个 prompt，运行时使用 dataset=line_by_line。
+3. random：随机 token 数据，不需要 dataset_path，但必须提供 tokenizer_path。
+4. 可转换输入：OpenAI messages JSONL（每行含 `messages` 数组）、text/prompt JSONL（每行含 `text` 或 `prompt` 字段）可先转换为 openqa。"""
+
+
+def inspect_dataset_file(path: Path, sample_limit: int = 20) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "exists": path.exists(),
+        "path": str(path),
+        "line_count": 0,
+        "sampled": 0,
+        "format": "missing",
+        "valid_openqa": False,
+        "valid_line_by_line": False,
+        "convertible": False,
+        "errors": [],
+    }
+    if not path.exists():
+        result["errors"].append("文件不存在。")
+        return result
+    if not path.is_file():
+        result["format"] = "invalid"
+        result["errors"].append("路径不是文件。")
+        return result
+
+    suffix = path.suffix.lower()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError:
+        result["format"] = "invalid"
+        result["errors"].append("文件不是 UTF-8 文本。")
+        return result
+
+    nonempty = [line.strip() for line in lines if line.strip()]
+    result["line_count"] = len(nonempty)
+    if not nonempty:
+        result["format"] = "empty"
+        result["errors"].append("文件没有非空数据行。")
+        return result
+    result["valid_line_by_line"] = True
+
+    if suffix == ".txt":
+        result["format"] = "line_by_line"
+        result["sampled"] = min(len(nonempty), sample_limit)
+        return result
+
+    formats_seen: set[str] = set()
+    for index, line in enumerate(nonempty[:sample_limit], 1):
+        result["sampled"] += 1
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError as exc:
+            result["errors"].append(f"第 {index} 行不是合法 JSON：{exc}")
+            formats_seen.add("invalid")
+            continue
+        if not isinstance(data, dict):
+            result["errors"].append(f"第 {index} 行不是 JSON 对象。")
+            formats_seen.add("invalid")
+            continue
+        if isinstance(data.get("question"), str) and data.get("question", "").strip():
+            formats_seen.add("openqa")
+        elif isinstance(data.get("messages"), list) and data["messages"]:
+            formats_seen.add("messages")
+        elif isinstance(data.get("text"), str) and data.get("text", "").strip():
+            formats_seen.add("text")
+        elif isinstance(data.get("prompt"), str) and data.get("prompt", "").strip():
+            formats_seen.add("prompt")
+        else:
+            result["errors"].append(f"第 {index} 行缺少可识别字段：question/messages/text/prompt。")
+            formats_seen.add("unknown")
+
+    if formats_seen == {"openqa"}:
+        result["format"] = "openqa"
+        result["valid_openqa"] = True
+    elif formats_seen and formats_seen <= {"messages"}:
+        result["format"] = "messages"
+        result["convertible"] = True
+    elif formats_seen and formats_seen <= {"text", "prompt"}:
+        result["format"] = "text"
+        result["convertible"] = True
+    elif "openqa" in formats_seen and formats_seen <= {"openqa", "messages", "text", "prompt"}:
+        result["format"] = "mixed_convertible"
+        result["convertible"] = True
+    else:
+        result["format"] = "invalid"
+    return result
+
+
+def dataset_validation_message(dataset_type: str, path: str) -> Tuple[bool, str]:
+    dataset_path = project_path(path)
+    info = inspect_dataset_file(dataset_path)
+    if dataset_type == "openqa":
+        if info["valid_openqa"]:
+            return True, f"数据集格式检查通过：{dataset_path} 是 EvalScope openqa JSONL，共 {info['line_count']} 条非空数据。"
+        if info["convertible"]:
+            return False, (
+                f"数据集不是 EvalScope openqa 直接格式，但可转换：检测到 {info['format']}。\n"
+                f"请使用菜单中的“自动转换 JSONL/TXT”，或运行 `python3 scripts/convert_dataset.py {dataset_path} outputs/converted_openqa.jsonl`。\n"
+                + SUPPORTED_EVALSCOPE_DATASET_FORMATS
+            )
+        return False, f"数据集格式不符合 EvalScope openqa 要求：{'; '.join(info['errors'])}\n{SUPPORTED_EVALSCOPE_DATASET_FORMATS}"
+    if dataset_type == "line_by_line":
+        if info["valid_line_by_line"]:
+            return True, f"数据集格式检查通过：{dataset_path} 是 line_by_line TXT，共 {info['line_count']} 条非空 prompt。"
+        return False, f"line_by_line 需要 TXT 文件且每行一个 prompt：{'; '.join(info['errors'])}\n{SUPPORTED_EVALSCOPE_DATASET_FORMATS}"
+    return True, "该数据集类型无需校验文件格式。"
+
+
+def print_dataset_validation(dataset_type: str, path: str) -> bool:
+    ok, message = dataset_validation_message(dataset_type, path)
+    print(message)
+    return ok
+
+
 def configure_dataset(base: Dict[str, Any]) -> None:
     dataset_options = [
         ("simulated", "内置模拟数据", "首次冒烟和流程验证推荐；自动生成 openqa JSONL，不需要外部下载。"),
@@ -759,6 +876,7 @@ def configure_dataset(base: Dict[str, Any]) -> None:
     selected = choose_option("数据集类型", dataset_options, base["dataset"].get("type", "simulated"))
     if selected == "simulated":
         base["dataset"]["type"] = "simulated"
+        base["dataset"]["name"] = prompt_text("数据集名称（写入报告，便于追溯）", base["dataset"].get("name", "simulated_openqa"))
         base["dataset"]["path"] = prompt_text("模拟数据输出路径", base["dataset"].get("path", "outputs/simulated_openqa.jsonl"))
         base["dataset"]["simulated_count"] = int(prompt_number("模拟样本条数", base["dataset"].get("simulated_count", 12), int))
         base["dataset"]["simulated_prompt_chars"] = int(prompt_number("每条模拟 prompt 约多少字符", base["dataset"].get("simulated_prompt_chars", 240), int))
@@ -766,20 +884,31 @@ def configure_dataset(base: Dict[str, Any]) -> None:
 
     if selected == "openqa":
         base["dataset"]["type"] = "openqa"
+        base["dataset"]["name"] = prompt_text("数据集名称（写入报告，便于追溯）", base["dataset"].get("name") or "custom_openqa")
         base["dataset"]["path"] = prompt_text("OpenQA JSONL 路径（每行含 question 字段）", base["dataset"].get("path", ""))
+        if base["dataset"]["path"]:
+            print_dataset_validation("openqa", base["dataset"]["path"])
         return
 
     if selected == "line_by_line":
         base["dataset"]["type"] = "line_by_line"
+        base["dataset"]["name"] = prompt_text("数据集名称（写入报告，便于追溯）", base["dataset"].get("name") or "line_by_line")
         while True:
             path = prompt_text("TXT 数据集路径（每行一个 prompt，必填）", base["dataset"].get("path", ""))
             if path:
                 base["dataset"]["path"] = path
+                print_dataset_validation("line_by_line", path)
                 return
             print("line_by_line 模式必须提供数据集路径。")
 
     if selected == "convert":
         source = prompt_text("源数据路径（JSONL 或 TXT）", "")
+        if source:
+            info = inspect_dataset_file(Path(source).expanduser())
+            print(
+                f"源数据检测：格式={info['format']}，非空行数={info['line_count']}，"
+                f"可直接 openqa={info['valid_openqa']}，可转换={info['convertible'] or info['valid_line_by_line']}"
+            )
         fmt = choose_option(
             "源数据格式",
             [
@@ -797,10 +926,12 @@ def configure_dataset(base: Dict[str, Any]) -> None:
         else:
             print("源文件暂不存在，已仅写入目标配置；运行前请先转换或补齐文件。")
         base["dataset"]["type"] = "openqa"
+        base["dataset"]["name"] = prompt_text("数据集名称（写入报告，便于追溯）", Path(output).stem or "converted_openqa")
         base["dataset"]["path"] = output
         return
 
     base["dataset"]["type"] = "random"
+    base["dataset"]["name"] = prompt_text("数据集名称（写入报告，便于追溯）", "random_tokens")
     if not base["model"].get("tokenizer_path"):
         base["model"]["tokenizer_path"] = prompt_text("random 数据集必须填写 tokenizer 路径或 ModelScope ID", "Qwen/Qwen3-0.6B")
     base["dataset"]["random_prompt_tokens"] = int(prompt_number("随机输入长度 tokens", base["dataset"].get("random_prompt_tokens", 512), int))
@@ -856,9 +987,9 @@ def configure_smoke(base: Dict[str, Any], profile: str) -> None:
     print("说明：这里只发少量请求，用来确认 API Key、URL、模型名、返回格式和 token 计量策略正常，避免正式压测跑到一半才失败。")
     smoke["enabled"] = prompt_yes_no("启用连接验证/小样本试跑（推荐）", bool(smoke.get("enabled", True)))
     if smoke["enabled"] and profile in {"standard", "expert"}:
-        smoke["parallel"] = int(prompt_number("小样本并发", smoke.get("parallel", 1), int))
-        smoke["number"] = int(prompt_number("小样本请求数", smoke.get("number", 3), int))
-        smoke["max_tokens"] = int(prompt_number("小样本 max_tokens", smoke.get("max_tokens", 32), int))
+        smoke["parallel"] = int(prompt_number("小样本并发（建议 1；只用于连通性验证，不代表正式性能）", smoke.get("parallel", 1), int))
+        smoke["number"] = int(prompt_number("小样本请求数（建议 2-5；用于验证 key、URL、模型名和返回格式）", smoke.get("number", 3), int))
+        smoke["max_tokens"] = int(prompt_number("小样本 max_tokens（单次最多输出 token 数；越大越慢、成本越高）", smoke.get("max_tokens", 32), int))
 
 
 def configure_quick_start(base: Dict[str, Any]) -> None:
@@ -869,6 +1000,8 @@ def configure_quick_start(base: Dict[str, Any]) -> None:
     base["dataset"]["simulated_prompt_chars"] = 240
     configure_targets(base)
     configure_smoke(base, "quick")
+    quick_max_tokens = int(prompt_number("快速压测 max_tokens（正式小梯度每次最多输出 token 数；越大越慢、成本越高）", 64, int))
+    base["scenarios"]["smoke"]["max_tokens"] = min(quick_max_tokens, 64)
     base["scenarios"]["gradient"]["enabled"] = prompt_yes_no("生成小规模并发梯度配置（推荐）", True)
     if base["scenarios"]["gradient"]["enabled"]:
         base["scenarios"]["gradient"].update(
@@ -877,7 +1010,7 @@ def configure_quick_start(base: Dict[str, Any]) -> None:
                 "numbers": [10, 20, 50],
                 "number_multiplier": 10,
                 "min_number": 10,
-                "max_tokens": 64,
+                "max_tokens": quick_max_tokens,
                 "sleep_interval": 5,
             }
         )
@@ -931,10 +1064,10 @@ def configure_gradient(base: Dict[str, Any]) -> None:
     )
     gradient.pop("numbers", None)
     if request_mode == "formula":
-        gradient["number_multiplier"] = int(prompt_number("请求数倍数", gradient.get("number_multiplier", 10), int))
-        gradient["min_number"] = int(prompt_number("每档最小请求数", gradient.get("min_number", 50), int))
+        gradient["number_multiplier"] = int(prompt_number("请求数倍数（每档请求数 = max(最小请求数, 并发 * 倍数)）", gradient.get("number_multiplier", 10), int))
+        gradient["min_number"] = int(prompt_number("每档最小请求数（太小会导致统计不稳定，正式建议 >= 50）", gradient.get("min_number", 50), int))
     elif request_mode == "fixed":
-        fixed = int(prompt_number("每档固定请求数", gradient.get("min_number", 50), int))
+        fixed = int(prompt_number("每档固定请求数（所有并发档位使用相同数据量）", gradient.get("min_number", 50), int))
         gradient["numbers"] = [fixed for _ in current]
         gradient["min_number"] = fixed
     else:
@@ -945,8 +1078,8 @@ def configure_gradient(base: Dict[str, Any]) -> None:
                 break
             print("请求数列表长度必须和并发列表一致。")
 
-    gradient["max_tokens"] = int(prompt_number("每次请求 max_tokens", gradient.get("max_tokens", 128), int))
-    gradient["sleep_interval"] = int(prompt_number("并发档位之间等待秒数", gradient.get("sleep_interval", 5), int))
+    gradient["max_tokens"] = int(prompt_number("每次请求 max_tokens（模型最多生成 token 数；越大越慢、成本越高）", gradient.get("max_tokens", 128), int))
+    gradient["sleep_interval"] = int(prompt_number("并发档位之间等待秒数（给服务释放资源，避免连续档位互相影响）", gradient.get("sleep_interval", 5), int))
 
 
 def configure_optional_scenarios(base: Dict[str, Any], profile: str) -> None:
@@ -1204,10 +1337,16 @@ def build_evalscope_args(
     elif dataset_type == "openqa":
         eval_args["dataset"] = "openqa"
         if dataset_cfg.get("path"):
+            ok, message = dataset_validation_message("openqa", dataset_cfg["path"])
+            if not ok:
+                raise ConfigError(message)
             eval_args["dataset_path"] = str(project_path(dataset_cfg["path"]))
     elif dataset_type == "line_by_line":
         if not dataset_cfg.get("path"):
             raise ConfigError("dataset.type=line_by_line requires dataset.path")
+        ok, message = dataset_validation_message("line_by_line", dataset_cfg["path"])
+        if not ok:
+            raise ConfigError(message)
         eval_args.update({"dataset": "line_by_line", "dataset_path": str(project_path(dataset_cfg["path"]))})
 
     max_tokens = overrides.get("max_tokens", scenario_cfg.get("max_tokens", dataset_cfg.get("output_tokens", 128)))
@@ -1627,12 +1766,29 @@ def metric_available(runs: List[Dict[str, Any]], key: str) -> bool:
     return any(run.get(key) not in {None, 0} for run in runs)
 
 
+def dataset_report_info(config: Dict[str, Any], runs: List[Dict[str, Any]]) -> Dict[str, str]:
+    dataset_cfg = config.get("dataset", {})
+    args_records = [run.get("args", {}) for run in runs if isinstance(run.get("args"), dict)]
+    evalscope_datasets = sorted({str(args.get("dataset")) for args in args_records if args.get("dataset")})
+    evalscope_paths = sorted({str(args.get("dataset_path")) for args in args_records if args.get("dataset_path")})
+    configured_path = dataset_cfg.get("path")
+    dataset_name = dataset_cfg.get("name") or (Path(str(configured_path)).stem if configured_path else dataset_cfg.get("type", "-"))
+    return {
+        "name": str(dataset_name or "-"),
+        "type": str(dataset_cfg.get("type") or "-"),
+        "path": str(configured_path or "-"),
+        "evalscope_dataset": ", ".join(evalscope_datasets) if evalscope_datasets else "-",
+        "evalscope_path": ", ".join(evalscope_paths) if evalscope_paths else "-",
+    }
+
+
 def generate_report(config: Dict[str, Any], results_dir: Path, output_file: Path) -> str:
     runs = collect_runs(results_dir)
     unavailable_tokens = token_metrics_unavailable(config, runs)
     best_qps = best_run_by(runs, "qps", "higher")
     best_success = best_run_by(runs, "success_rate_pct", "higher")
     best_latency = best_run_by(runs, "avg_latency_ms", "lower")
+    dataset_info = dataset_report_info(config, runs)
 
     lines: List[str] = []
     lines.append("# Model Benchmark 压测报告")
@@ -1645,7 +1801,11 @@ def generate_report(config: Dict[str, Any], results_dir: Path, output_file: Path
     lines.append(f"| 模型 | {config['model'].get('name')} |")
     lines.append(f"| API | {config['model'].get('api')} |")
     lines.append(f"| API URL | {config['model'].get('api_url')} |")
-    lines.append(f"| 数据集类型 | {config['dataset'].get('type')} |")
+    lines.append(f"| 压测数据集名称 | {dataset_info['name']} |")
+    lines.append(f"| 配置数据集类型 | {dataset_info['type']} |")
+    lines.append(f"| 配置数据集路径 | {dataset_info['path']} |")
+    lines.append(f"| EvalScope dataset | {dataset_info['evalscope_dataset']} |")
+    lines.append(f"| EvalScope dataset_path | {dataset_info['evalscope_path']} |")
     lines.append(f"| Token计量 | {config['token_accounting'].get('mode')} / {config['token_accounting'].get('on_missing_usage')} |")
     lines.append(f"| 结果目录 | {results_dir} |")
     lines.append("")

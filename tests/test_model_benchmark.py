@@ -105,10 +105,59 @@ target:
             total, success, failed = mb.convert_to_openqa(txt, tmp / "txt_out.jsonl")
             self.assertEqual((total, success, failed), (2, 2, 0))
 
+    def test_dataset_validation_reports_supported_formats(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            openqa = tmp / "openqa.jsonl"
+            openqa.write_text(json.dumps({"question": "hello"}) + "\n", encoding="utf-8")
+            ok, message = mb.dataset_validation_message("openqa", str(openqa))
+            self.assertTrue(ok)
+            self.assertIn("格式检查通过", message)
+
+            messages = tmp / "messages.jsonl"
+            messages.write_text(json.dumps({"messages": [{"role": "user", "content": "hi"}]}) + "\n", encoding="utf-8")
+            ok, message = mb.dataset_validation_message("openqa", str(messages))
+            self.assertFalse(ok)
+            self.assertIn("可转换", message)
+            self.assertIn("openqa JSONL", message)
+
+            bad = tmp / "bad.jsonl"
+            bad.write_text(json.dumps({"foo": "bar"}) + "\n", encoding="utf-8")
+            ok, message = mb.dataset_validation_message("openqa", str(bad))
+            self.assertFalse(ok)
+            self.assertIn("EvalScope perf 常用数据集格式", message)
+
+            txt = tmp / "prompts.txt"
+            txt.write_text("hello\n", encoding="utf-8")
+            ok, message = mb.dataset_validation_message("line_by_line", str(txt))
+            self.assertTrue(ok)
+            self.assertIn("line_by_line TXT", message)
+
+            no_suffix = tmp / "prompts.data"
+            no_suffix.write_text("hello\nworld\n", encoding="utf-8")
+            ok, message = mb.dataset_validation_message("line_by_line", str(no_suffix))
+            self.assertTrue(ok)
+            self.assertIn("line_by_line TXT", message)
+
+    def test_build_evalscope_args_rejects_invalid_openqa_dataset(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            config = self.make_config(tmp)
+            bad = tmp / "bad.jsonl"
+            bad.write_text(json.dumps({"messages": [{"role": "user", "content": "hi"}]}) + "\n", encoding="utf-8")
+            config["dataset"]["type"] = "openqa"
+            config["dataset"]["path"] = str(bad)
+
+            with self.assertRaises(mb.ConfigError) as ctx:
+                mb.build_evalscope_args(config, "smoke", {"parallel": 1, "number": 1, "max_tokens": 8}, tmp / "out")
+
+            self.assertIn("可转换", str(ctx.exception))
+
     def test_report_parses_nested_and_flat_outputs(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             config = self.make_config(tmp)
+            config["dataset"]["name"] = "unit_test_dataset"
             config["targets"]["qps"] = 2
             config["targets"]["avg_ttft_ms"] = 500
 
@@ -181,6 +230,9 @@ target:
             report_path = tmp / "report.md"
             report = mb.generate_report(config, tmp, report_path)
             self.assertIn("指标覆盖检查", report)
+            self.assertIn("压测数据集名称", report)
+            self.assertIn("unit_test_dataset", report)
+            self.assertIn("EvalScope dataset", report)
             self.assertIn("数据量与成功率", report)
             self.assertIn("QPS 与吞吐", report)
             self.assertIn("Token 统计", report)
