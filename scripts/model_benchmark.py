@@ -808,17 +808,82 @@ def configure_dataset(base: Dict[str, Any]) -> None:
 
 
 def configure_targets(base: Dict[str, Any]) -> None:
-    print("\n目标指标（可直接回车跳过；报告会展示目标差距）")
-    base["targets"]["success_rate_pct"] = float(prompt_number("目标成功率(%)", base["targets"].get("success_rate_pct", 99), float))
-    base["targets"]["qps"] = prompt_optional_number("目标 QPS(req/s)", base["targets"].get("qps"))
-    base["targets"]["output_tps"] = prompt_optional_number("目标输出吞吐(tok/s)", base["targets"].get("output_tps"))
-    base["targets"]["avg_ttft_ms"] = prompt_optional_number("目标平均 TTFT(ms)", base["targets"].get("avg_ttft_ms"))
-    base["targets"]["p95_ttft_ms"] = prompt_optional_number("目标 P95 TTFT(ms)", base["targets"].get("p95_ttft_ms"))
-    base["targets"]["p99_ttft_ms"] = prompt_optional_number("目标 P99 TTFT(ms)", base["targets"].get("p99_ttft_ms"))
-    base["targets"]["avg_tpot_ms"] = prompt_optional_number("目标平均 TPOT(ms)", base["targets"].get("avg_tpot_ms"))
-    base["targets"]["avg_latency_ms"] = prompt_optional_number("目标平均端到端延迟(ms)", base["targets"].get("avg_latency_ms"))
-    base["targets"]["p95_latency_ms"] = prompt_optional_number("目标 P95 端到端延迟(ms)", base["targets"].get("p95_latency_ms"))
-    base["targets"]["p99_latency_ms"] = prompt_optional_number("目标 P99 端到端延迟(ms)", base["targets"].get("p99_latency_ms"))
+    for key in list(base.get("targets", {})):
+        base["targets"][key] = None
+    base["targets"]["success_rate_pct"] = None
+
+
+def configure_token_accounting(base: Dict[str, Any], profile: str) -> None:
+    if profile == "quick":
+        base["token_accounting"]["mode"] = "auto"
+        base["token_accounting"]["on_missing_usage"] = "skip_token_metrics"
+        base["model"]["tokenizer_path"] = None
+        print("\nToken 计量：快速开始默认优先使用 API usage；如果接口不返回 usage，则跳过 token 指标并在报告中标注。")
+        return
+
+    base["token_accounting"]["mode"] = choose_option(
+        "Token 计量模式",
+        [
+            ("auto", "自动", "优先使用 API usage；缺失时按下面策略处理。"),
+            ("api_usage", "只用 API usage", "最准确，但服务不返回 usage 时可能失败或跳过 token 指标。"),
+            ("tokenizer", "使用 tokenizer 估算", "适合 API 不返回 usage；需要 tokenizer 路径或 ModelScope ID。"),
+        ],
+        base["token_accounting"].get("mode", "auto"),
+    )
+    base["token_accounting"]["on_missing_usage"] = choose_option(
+        "API usage 缺失时怎么办",
+        [
+            ("fallback_tokenizer", "回退 tokenizer", "推荐；需要 tokenizer_path，报告中 token 指标仍可用。"),
+            ("skip_token_metrics", "跳过 token 指标", "只看 QPS/TTFT/E2E；报告会标注 token/TPOT 不作为结论。"),
+            ("fail", "失败并停止", "适合强制要求 API 返回 usage 的验收。"),
+        ],
+        base["token_accounting"]["on_missing_usage"],
+    )
+    needs_tokenizer = (
+        base["token_accounting"]["mode"] == "tokenizer"
+        or base["token_accounting"]["on_missing_usage"] == "fallback_tokenizer"
+    )
+    if needs_tokenizer:
+        base["model"]["tokenizer_path"] = prompt_text("Tokenizer 路径或 ModelScope ID（当前策略建议填写）", base["model"].get("tokenizer_path"))
+    else:
+        base["model"]["tokenizer_path"] = None
+        print("当前 token 计量策略不需要 tokenizer，已跳过 tokenizer 配置。")
+
+
+def configure_smoke(base: Dict[str, Any], profile: str) -> None:
+    smoke = base["scenarios"]["smoke"]
+    print("\n连接验证 / 小样本试跑")
+    print("说明：这里只发少量请求，用来确认 API Key、URL、模型名、返回格式和 token 计量策略正常，避免正式压测跑到一半才失败。")
+    smoke["enabled"] = prompt_yes_no("启用连接验证/小样本试跑（推荐）", bool(smoke.get("enabled", True)))
+    if smoke["enabled"] and profile in {"standard", "expert"}:
+        smoke["parallel"] = int(prompt_number("小样本并发", smoke.get("parallel", 1), int))
+        smoke["number"] = int(prompt_number("小样本请求数", smoke.get("number", 3), int))
+        smoke["max_tokens"] = int(prompt_number("小样本 max_tokens", smoke.get("max_tokens", 32), int))
+
+
+def configure_quick_start(base: Dict[str, Any]) -> None:
+    configure_token_accounting(base, "quick")
+    base["dataset"]["type"] = "simulated"
+    base["dataset"]["path"] = "outputs/simulated_openqa.jsonl"
+    base["dataset"]["simulated_count"] = 12
+    base["dataset"]["simulated_prompt_chars"] = 240
+    configure_targets(base)
+    configure_smoke(base, "quick")
+    base["scenarios"]["gradient"]["enabled"] = prompt_yes_no("生成小规模并发梯度配置（推荐）", True)
+    if base["scenarios"]["gradient"]["enabled"]:
+        base["scenarios"]["gradient"].update(
+            {
+                "parallels": [1, 2, 5],
+                "numbers": [10, 20, 50],
+                "number_multiplier": 10,
+                "min_number": 10,
+                "max_tokens": 64,
+                "sleep_interval": 5,
+            }
+        )
+    base["scenarios"]["sla"]["enabled"] = False
+    base["scenarios"]["stability"]["enabled"] = False
+    base["scenarios"]["length_matrix"]["enabled"] = False
 
 
 def configure_gradient(base: Dict[str, Any]) -> None:
@@ -884,31 +949,18 @@ def configure_gradient(base: Dict[str, Any]) -> None:
     gradient["sleep_interval"] = int(prompt_number("并发档位之间等待秒数", gradient.get("sleep_interval", 5), int))
 
 
-def configure_optional_scenarios(base: Dict[str, Any]) -> None:
-    smoke = base["scenarios"]["smoke"]
-    print("\n连接验证 / 小样本试跑")
-    print("说明：这里只发少量请求，用来确认 API Key、URL、模型名、返回格式和 token 计量策略正常，避免正式压测跑到一半才失败。")
-    smoke["enabled"] = prompt_yes_no("启用连接验证/小样本试跑（推荐）", bool(smoke.get("enabled", True)))
-    if smoke["enabled"]:
-        smoke["parallel"] = int(prompt_number("冒烟并发", smoke.get("parallel", 1), int))
-        smoke["number"] = int(prompt_number("冒烟请求数", smoke.get("number", 3), int))
-        smoke["max_tokens"] = int(prompt_number("冒烟 max_tokens", smoke.get("max_tokens", 32), int))
-
+def configure_optional_scenarios(base: Dict[str, Any], profile: str) -> None:
+    configure_smoke(base, profile)
     configure_gradient(base)
 
-    sla = base["scenarios"]["sla"]
-    sla["enabled"] = prompt_yes_no("启用 SLA 自动调优", bool(sla.get("enabled", False)))
-    if sla["enabled"]:
-        sla["variable"] = choose_option(
-            "SLA 调优变量",
-            [("parallel", "并发数", "寻找满足目标的最大并发。"), ("rate", "请求速率", "寻找满足目标的最大请求速率。")],
-            sla.get("variable", "parallel"),
-        )
-        sla["lower_bound"] = int(prompt_number("SLA 搜索下界", sla.get("lower_bound", 1), int))
-        sla["upper_bound"] = int(prompt_number("SLA 搜索上界", sla.get("upper_bound", 100), int))
-        sla["number_multiplier"] = float(prompt_number("SLA 每档请求数倍数", sla.get("number_multiplier", 5), float))
-        sla["num_runs"] = int(prompt_number("SLA 每档重复次数", sla.get("num_runs", 3), int))
+    base["scenarios"]["sla"]["enabled"] = False
+    if profile == "standard":
+        print("标准模式不询问目标值，已跳过 SLA 自动调优；报告会输出完整指标数据。")
+        base["scenarios"]["stability"]["enabled"] = False
+        base["scenarios"]["length_matrix"]["enabled"] = False
+        return
 
+    print("专家模式不询问目标值，SLA 自动调优默认关闭；如需 SLA 约束，请运行后编辑 YAML 的 targets/scenarios.sla。")
     stability = base["scenarios"]["stability"]
     stability["enabled"] = prompt_yes_no("启用稳定性测试", bool(stability.get("enabled", False)))
     if stability["enabled"]:
@@ -935,6 +987,15 @@ def run_menu(args: argparse.Namespace) -> int:
 
     print("Model Benchmark 配置向导")
     print("说明：方括号中是默认值，直接回车会使用默认；固定选项请输入编号。")
+    profile = choose_option(
+        "使用模式",
+        [
+            ("quick", "快速开始", "只问模型、URL、API Key，自动配置连接验证和小规模并发梯度。"),
+            ("standard", "标准压测", "配置 token 策略、数据集、并发梯度和请求数策略。"),
+            ("expert", "专家模式", "在标准压测基础上开放稳定性测试和输入/输出长度矩阵。"),
+        ],
+        "quick",
+    )
     print("\n模型连接")
     base["model"]["name"] = prompt_text("模型名称", base["model"]["name"])
     base["model"]["api_url"] = prompt_text("OpenAI-compatible API URL", base["model"]["api_url"])
@@ -945,37 +1006,13 @@ def run_menu(args: argparse.Namespace) -> int:
     except (EOFError, KeyboardInterrupt):
         secret = ""
 
-    base["token_accounting"]["mode"] = choose_option(
-        "Token 计量模式",
-        [
-            ("auto", "自动", "优先使用 API usage；缺失时按下面策略处理。"),
-            ("api_usage", "只用 API usage", "最准确，但服务不返回 usage 时可能失败或跳过 token 指标。"),
-            ("tokenizer", "使用 tokenizer 估算", "适合 API 不返回 usage；需要 tokenizer 路径或 ModelScope ID。"),
-        ],
-        base["token_accounting"].get("mode", "auto"),
-    )
-    base["token_accounting"]["on_missing_usage"] = choose_option(
-        "API usage 缺失时怎么办",
-        [
-            ("fallback_tokenizer", "回退 tokenizer", "推荐；需要 tokenizer_path，报告中 token 指标仍可用。"),
-            ("skip_token_metrics", "跳过 token 指标", "只看 QPS/TTFT/E2E；报告会标注 token/TPOT 不作为结论。"),
-            ("fail", "失败并停止", "适合强制要求 API 返回 usage 的验收。"),
-        ],
-        base["token_accounting"]["on_missing_usage"],
-    )
-    needs_tokenizer = (
-        base["token_accounting"]["mode"] == "tokenizer"
-        or base["token_accounting"]["on_missing_usage"] == "fallback_tokenizer"
-    )
-    if needs_tokenizer:
-        base["model"]["tokenizer_path"] = prompt_text("Tokenizer 路径或 ModelScope ID（当前策略建议填写）", base["model"].get("tokenizer_path"))
+    if profile == "quick":
+        configure_quick_start(base)
     else:
-        base["model"]["tokenizer_path"] = None
-        print("当前 token 计量策略不需要 tokenizer，已跳过 tokenizer 配置。")
-
-    configure_dataset(base)
-    configure_targets(base)
-    configure_optional_scenarios(base)
+        configure_token_accounting(base, profile)
+        configure_dataset(base)
+        configure_targets(base)
+        configure_optional_scenarios(base, profile)
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1494,6 +1531,10 @@ def collect_runs(results_dir: Path) -> List[Dict[str, Any]]:
             run[f"p{suffix}_tpot_ms"] = seconds_to_ms(percentile.get("TPOT (s)", {}).get(label))
             run[f"p{suffix}_latency_ms"] = seconds_to_ms(percentile.get("Latency (s)", {}).get(label))
             run[f"p{suffix}_itl_ms"] = seconds_to_ms(percentile.get("ITL (s)", {}).get(label))
+            run[f"p{suffix}_input_tokens"] = percentile.get("Input tokens", {}).get(label)
+            run[f"p{suffix}_output_tokens"] = percentile.get("Output tokens", {}).get(label)
+            run[f"p{suffix}_output_per_req_tps"] = percentile.get("Output (tok/s)", {}).get(label)
+            run[f"p{suffix}_total_per_req_tps"] = percentile.get("Total (tok/s)", {}).get(label)
         runs.append(run)
     runs.sort(key=lambda item: (str(item["scenario"]), item.get("parallel") or 0, str(item["path"])))
     return runs
@@ -1574,14 +1615,24 @@ def best_run_by(runs: List[Dict[str, Any]], key: str, direction: str) -> Optiona
     return max(candidates, key=lambda item: item[key]) if direction == "higher" else min(candidates, key=lambda item: item[key])
 
 
+def total_tokens(run: Dict[str, Any], key: str) -> Optional[float]:
+    avg = safe_float(run.get(key))
+    succeeded = safe_float(run.get("succeed_requests"))
+    if avg is None or succeeded is None:
+        return None
+    return avg * succeeded
+
+
+def metric_available(runs: List[Dict[str, Any]], key: str) -> bool:
+    return any(run.get(key) not in {None, 0} for run in runs)
+
+
 def generate_report(config: Dict[str, Any], results_dir: Path, output_file: Path) -> str:
     runs = collect_runs(results_dir)
     unavailable_tokens = token_metrics_unavailable(config, runs)
-    target_rows = evaluate_targets(config, runs)
     best_qps = best_run_by(runs, "qps", "higher")
-    success_target = float(config.get("targets", {}).get("success_rate_pct") or 99)
-    safe_runs = [run for run in runs if (run.get("success_rate_pct") or 0) >= success_target]
-    safe_concurrency = max((run.get("parallel") or 0 for run in safe_runs), default=None)
+    best_success = best_run_by(runs, "success_rate_pct", "higher")
+    best_latency = best_run_by(runs, "avg_latency_ms", "lower")
 
     lines: List[str] = []
     lines.append("# Model Benchmark 压测报告")
@@ -1603,18 +1654,22 @@ def generate_report(config: Dict[str, Any], results_dir: Path, output_file: Path
         lines.append("> Token 指标不可计或仅为 0：报告中的 token 吞吐、TPOT、平均输入/输出 token 不作为结论依据。")
         lines.append("")
 
-    lines.append("## 2. 目标达标总览")
+    lines.append("## 2. 指标覆盖检查")
     lines.append("")
-    if target_rows:
-        lines.append("| 指标 | 目标 | 最佳实测 | 差距 | 是否达标 | 来源 |")
-        lines.append("|------|------|----------|------|----------|------|")
-        for row in target_rows:
-            status = "达标" if row["passed"] else "未达标"
-            lines.append(
-                f"| {row['metric']} | {fmt(row['target'])} | {fmt(row['actual'])} | {fmt(row['gap'])} | {status} | {row['run']} |"
-            )
-    else:
-        lines.append("未配置目标指标。")
+    coverage = [
+        ("数据量", bool(runs), "Total/Succeed/Failed requests"),
+        ("成功率", metric_available(runs, "success_rate_pct"), "成功请求数 / 总请求数"),
+        ("QPS", metric_available(runs, "qps"), "Request throughput"),
+        ("TTFT", metric_available(runs, "avg_ttft_ms"), "平均 + P50/P90/P95/P99"),
+        ("TPOT", (not unavailable_tokens) and metric_available(runs, "avg_tpot_ms"), "平均 + P50/P90/P95/P99"),
+        ("E2E", metric_available(runs, "avg_latency_ms"), "平均 + P50/P90/P95/P99"),
+        ("ITL", metric_available(runs, "avg_itl_ms"), "平均 + P50/P90/P95/P99"),
+        ("Token 统计", (not unavailable_tokens) and metric_available(runs, "avg_output_tokens"), "平均 + P50/P90/P95/P99 输入/输出 tokens"),
+    ]
+    lines.append("| 指标 | 是否覆盖 | 说明 |")
+    lines.append("|------|----------|------|")
+    for name, covered, note in coverage:
+        lines.append(f"| {name} | {'是' if covered else '否'} | {note} |")
     lines.append("")
 
     lines.append("## 3. 结论建议")
@@ -1625,21 +1680,46 @@ def generate_report(config: Dict[str, Any], results_dir: Path, output_file: Path
         )
     else:
         lines.append("- 未找到可用 QPS 结果。")
-    if safe_concurrency is not None:
-        lines.append(f"- 按成功率目标 {success_target:.2f}% 计算，最高安全并发为 {fmt(safe_concurrency, 0)}。")
-    else:
-        lines.append(f"- 没有并发级别达到成功率目标 {success_target:.2f}%。")
+    if best_success:
+        lines.append(
+            f"- 最高成功率出现在 `{best_success.get('scenario')}` 并发 {fmt(best_success.get('parallel'), 0)}：{fmt(best_success.get('success_rate_pct'))}%。"
+        )
+    if best_latency:
+        lines.append(
+            f"- 最低平均 E2E 延迟出现在 `{best_latency.get('scenario')}` 并发 {fmt(best_latency.get('parallel'), 0)}：{fmt(best_latency.get('avg_latency_ms'))} ms。"
+        )
+    lines.append("- QPS、成功率和数据量是运行级指标，没有单请求 P90/P95/P99；延迟、token 数和单请求吞吐提供分位数。")
     lines.append("")
 
-    lines.append("## 4. 基本性能表")
+    lines.append("## 4. 数据量与成功率")
     lines.append("")
-    lines.append("| 场景 | 并发 | 总请求 | 成功率(%) | QPS | 输出吞吐(tok/s) | 总吞吐(tok/s) |")
-    lines.append("|------|------|--------|-----------|-----|-----------------|---------------|")
+    lines.append("| 场景 | 并发 | 总请求 | 成功 | 失败 | 成功率(%) | 平均输入Tokens | 平均输出Tokens | 总输入Tokens | 总输出Tokens |")
+    lines.append("|------|------|--------|------|------|-----------|----------------|----------------|--------------|--------------|")
     for run in runs:
         lines.append(
             f"| {run['scenario']} | {fmt(run.get('parallel'), 0)} | {fmt(run.get('total_requests'), 0)} | "
-            f"{fmt(run.get('success_rate_pct'))} | {fmt(run.get('qps'))} | "
-            f"{fmt(run.get('output_tps'), unavailable=unavailable_tokens)} | {fmt(run.get('total_tps'), unavailable=unavailable_tokens)} |"
+            f"{fmt(run.get('succeed_requests'), 0)} | {fmt(run.get('failed_requests'), 0)} | {fmt(run.get('success_rate_pct'))} | "
+            f"{fmt(run.get('avg_input_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('avg_output_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(total_tokens(run, 'avg_input_tokens'), 0, unavailable=unavailable_tokens)} | "
+            f"{fmt(total_tokens(run, 'avg_output_tokens'), 0, unavailable=unavailable_tokens)} |"
+        )
+    lines.append("")
+
+    lines.append("## 5. QPS 与吞吐")
+    lines.append("")
+    lines.append("| 场景 | 并发 | QPS(req/s) | 输出吞吐(tok/s) | 总吞吐(tok/s) | 单请求输出吞吐P90 | P95 | P99 | 单请求总吞吐P90 | P95 | P99 |")
+    lines.append("|------|------|------------|-----------------|---------------|-------------------|-----|-----|-----------------|-----|-----|")
+    for run in runs:
+        lines.append(
+            f"| {run['scenario']} | {fmt(run.get('parallel'), 0)} | {fmt(run.get('qps'))} | "
+            f"{fmt(run.get('output_tps'), unavailable=unavailable_tokens)} | {fmt(run.get('total_tps'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p90_output_per_req_tps'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p95_output_per_req_tps'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p99_output_per_req_tps'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p90_total_per_req_tps'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p95_total_per_req_tps'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p99_total_per_req_tps'), unavailable=unavailable_tokens)} |"
         )
     lines.append("")
 
@@ -1666,13 +1746,21 @@ def generate_report(config: Dict[str, Any], results_dir: Path, output_file: Path
 
     lines.append("## 9. Token 统计")
     lines.append("")
-    lines.append("| 场景 | 并发 | 平均输入Tokens | 平均输出Tokens |")
-    lines.append("|------|------|----------------|----------------|")
+    lines.append("| 场景 | 并发 | 输入平均 | 输入P50 | 输入P90 | 输入P95 | 输入P99 | 输出平均 | 输出P50 | 输出P90 | 输出P95 | 输出P99 |")
+    lines.append("|------|------|----------|---------|---------|---------|---------|----------|---------|---------|---------|---------|")
     for run in runs:
         lines.append(
             f"| {run['scenario']} | {fmt(run.get('parallel'), 0)} | "
             f"{fmt(run.get('avg_input_tokens'), unavailable=unavailable_tokens)} | "
-            f"{fmt(run.get('avg_output_tokens'), unavailable=unavailable_tokens)} |"
+            f"{fmt(run.get('p50_input_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p90_input_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p95_input_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p99_input_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('avg_output_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p50_output_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p90_output_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p95_output_tokens'), unavailable=unavailable_tokens)} | "
+            f"{fmt(run.get('p99_output_tokens'), unavailable=unavailable_tokens)} |"
         )
     lines.append("")
 

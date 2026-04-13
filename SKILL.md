@@ -59,7 +59,7 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
 - `model`: `api`、`name`、`api_url`、`api_key_env`、`tokenizer_path`。默认端点是阿里云 DashScope OpenAI-compatible URL。API key 只从环境变量或本地 env 文件读取，日志和命令摘要必须脱敏。
 - `dataset`: `simulated`、`openqa`、`line_by_line`、`random`。首次测试优先使用 `simulated`，它会生成本地 openqa JSONL，避免外部数据集下载。
 - `token_accounting`: 菜单用编号选择 `auto|api_usage|tokenizer`，usage 缺失策略用编号选择 `fail|fallback_tokenizer|skip_token_metrics`。默认 `auto + fallback_tokenizer`。
-- `targets`: 成功率、QPS、输出吞吐、平均/P95/P99 TTFT、TPOT、E2E 延迟目标。菜单会逐项询问常用目标，报告必须展示目标、实测值、差距和达标状态。
+- `targets`: 默认不要求用户填写目标值。报告直接输出一揽子完整性能数据；仅当用户手动编辑 YAML 做 SLA/验收时才使用 targets。
 - `scenarios`: `smoke`、`gradient`、`sla`、`stability`、`length_matrix` 的开关和参数。并发梯度支持推荐列表、手动列表、起止步长、起止档位数量、倍增；每档请求数支持公式、固定值、手动配对列表。
 
 ## EvalScope Perf Rules
@@ -76,11 +76,12 @@ description: 通用模型 API 性能压测技能。使用 EvalScope perf 对 Ope
 报告必须是 Markdown，并包含：
 
 - 测试信息：时间、模型、API、数据集、token 计量策略、结果目录。
-- 目标达标总览：每个目标的目标值、最佳实测、差距、是否达标、来源并发。
-- 结论建议：QPS 峰值、最高安全并发、未达标原因。
-- 基本性能表：场景、并发、请求数、成功率、QPS、吞吐。
+- 指标覆盖检查：数据量、成功率、QPS、TTFT、TPOT、E2E、ITL、Token 统计是否完整。
+- 结论建议：QPS 峰值、最高成功率、最低平均 E2E 延迟，以及哪些指标没有单请求分位数。
+- 数据量与成功率：场景、并发、总请求、成功、失败、成功率、平均/总输入输出 tokens。
+- QPS 与吞吐：运行级 QPS、输出吞吐、总吞吐，以及单请求吞吐 P90/P95/P99。
 - TTFT、TPOT、E2E、ITL：平均、P50、P90、P95、P99。
-- Token 统计：平均输入/输出 tokens。
+- Token 统计：输入/输出 tokens 的平均、P50、P90、P95、P99。
 - 错误摘要和原始结果路径。
 
 当 `on_missing_usage=skip_token_metrics`，或结果中 token 统计全为 0 时，报告中 token 吞吐、TPOT、平均 token 字段显示为不可计，并明确提醒这些指标不能作为结论。

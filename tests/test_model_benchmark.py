@@ -140,9 +140,39 @@ target:
                     json.dumps(
                         [
                             {"Percentiles": "50%", "TTFT (s)": ttft, "TPOT (s)": 0.01, "Latency (s)": 1.0, "ITL (s)": 0.01},
-                            {"Percentiles": "90%", "TTFT (s)": ttft + 0.1, "TPOT (s)": 0.02, "Latency (s)": 1.2, "ITL (s)": 0.02},
-                            {"Percentiles": "95%", "TTFT (s)": ttft + 0.2, "TPOT (s)": 0.03, "Latency (s)": 1.3, "ITL (s)": 0.03},
-                            {"Percentiles": "99%", "TTFT (s)": ttft + 0.3, "TPOT (s)": 0.04, "Latency (s)": 1.4, "ITL (s)": 0.04},
+                            {
+                                "Percentiles": "90%",
+                                "TTFT (s)": ttft + 0.1,
+                                "TPOT (s)": 0.02,
+                                "Latency (s)": 1.2,
+                                "ITL (s)": 0.02,
+                                "Input tokens": 12,
+                                "Output tokens": 8,
+                                "Output (tok/s)": 6.5,
+                                "Total (tok/s)": 18.5,
+                            },
+                            {
+                                "Percentiles": "95%",
+                                "TTFT (s)": ttft + 0.2,
+                                "TPOT (s)": 0.03,
+                                "Latency (s)": 1.3,
+                                "ITL (s)": 0.03,
+                                "Input tokens": 13,
+                                "Output tokens": 9,
+                                "Output (tok/s)": 7.5,
+                                "Total (tok/s)": 19.5,
+                            },
+                            {
+                                "Percentiles": "99%",
+                                "TTFT (s)": ttft + 0.3,
+                                "TPOT (s)": 0.04,
+                                "Latency (s)": 1.4,
+                                "ITL (s)": 0.04,
+                                "Input tokens": 14,
+                                "Output tokens": 10,
+                                "Output (tok/s)": 8.5,
+                                "Total (tok/s)": 20.5,
+                            },
                         ]
                     ),
                     encoding="utf-8",
@@ -150,7 +180,11 @@ target:
 
             report_path = tmp / "report.md"
             report = mb.generate_report(config, tmp, report_path)
-            self.assertIn("目标达标总览", report)
+            self.assertIn("指标覆盖检查", report)
+            self.assertIn("数据量与成功率", report)
+            self.assertIn("QPS 与吞吐", report)
+            self.assertIn("Token 统计", report)
+            self.assertNotIn("目标达标总览", report)
             self.assertIn("QPS 峰值", report)
             self.assertIn("parallel_2", report)
             self.assertTrue(report_path.exists())
@@ -205,6 +239,23 @@ target:
         self.assertEqual(mb.build_parallel_values("count", [1], 1, 10, count=4), [1, 4, 7, 10])
         self.assertEqual(mb.build_parallel_values("multiply", [1], 1, 10, multiplier=2), [1, 2, 4, 8, 10])
         self.assertEqual(mb.parse_int_values("1, 2, 5"), [1, 2, 5])
+
+    def test_quick_start_clears_targets_and_uses_small_gradient(self):
+        config = copy.deepcopy(mb.DEFAULT_CONFIG)
+        original_yes_no = mb.prompt_yes_no
+        try:
+            mb.prompt_yes_no = lambda _label, default: default
+            mb.configure_quick_start(config)
+        finally:
+            mb.prompt_yes_no = original_yes_no
+
+        self.assertEqual(config["token_accounting"]["mode"], "auto")
+        self.assertEqual(config["token_accounting"]["on_missing_usage"], "skip_token_metrics")
+        self.assertEqual(config["dataset"]["type"], "simulated")
+        self.assertEqual(config["scenarios"]["gradient"]["parallels"], [1, 2, 5])
+        self.assertEqual(config["scenarios"]["gradient"]["numbers"], [10, 20, 50])
+        self.assertIsNone(config["targets"]["qps"])
+        self.assertIsNone(config["targets"]["success_rate_pct"])
 
     def test_main_without_args_defaults_to_menu(self):
         original = mb.run_menu
